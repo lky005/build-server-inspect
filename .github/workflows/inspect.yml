@@ -1,0 +1,49 @@
+name: 编译服务器全方位检测
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: '要检测的服务器 / Runner 标签（如 ubuntu-latest、self-hosted、自定义标签）'
+        required: true
+        default: 'ubuntu-latest'
+      mode:
+        description: '检测模式'
+        type: choice
+        default: full
+        options:
+          - full   # 完整检测：含多核扩展、随机 IO、构建基准
+          - quick  # 快速检测：跳过耗时项
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: 全方位体检
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: 检出检测脚本
+        uses: actions/checkout@v4
+
+      - name: 运行检测（系统配置 + 工具链 + 性能基准）
+        run: bash scripts/inspect.sh "${{ inputs.mode }}"
+        env:
+          MODE: ${{ inputs.mode }}
+
+      - name: 渲染详细报告
+        run: |
+          python3 scripts/render_report.py
+          echo "报告已生成: artifacts/report.md"
+
+      - name: 报告写入 Actions 摘要（本页可直接看）
+        run: |
+          cat artifacts/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传完整报告（30 天内可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-server-report
+          path: artifacts/
+          retention-days: 30
