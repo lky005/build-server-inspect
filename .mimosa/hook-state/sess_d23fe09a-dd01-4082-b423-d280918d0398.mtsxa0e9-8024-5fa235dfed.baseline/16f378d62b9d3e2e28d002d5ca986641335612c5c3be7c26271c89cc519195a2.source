@@ -32,16 +32,13 @@ build = B.get("build")
 
 records = []
 records.append(("CPU 单线程", cpu.get("single_millions_per_sec"), "百万迭代/秒",
-                {5: 0.08, 4: 0.05, 3: 0.03, 2: 0.02}))
-if cpu.get("multi_millions_per_sec"):
-    base = cpu.get("threads") or 1
+                {5: 10, 4: 6.5, 3: 3.5, 2: 1.8}))
+if cpu.get("multi_iters_per_sec"):
+    base = 10 * (cpu.get("threads") or 1)
     records.append(("CPU 多核并行吞吐", cpu.get("multi_millions_per_sec"), "百万迭代/秒",
-                    {5: base * 0.08, 4: base * 0.05, 3: base * 0.03, 2: base * 0.02}))
+                    {5: base * 0.8, 4: base * 0.6, 3: base * 0.4, 2: base * 0.25}))
 if cpu.get("speedup") is not None:
-    thrd = cpu.get("threads") or 1
-    eff = round(cpu["speedup"] / thrd, 2)
-    records.append(("CPU 多核扩展效率", eff,
-                    f"（实测加速 {cpu['speedup']}× / {thrd} 线程）",
+    records.append(("CPU 多核扩展比", cpu.get("speedup"), "倍数（理想=核数）",
                     {5: 0.85, 4: 0.65, 3: 0.45, 2: 0.25}))
 records.append(("内存顺序写带宽", mem.get("write_gbs"), "GB/s", {5: 6, 4: 4, 3: 2, 2: 1}))
 records.append(("内存顺序读带宽", mem.get("read_gbs"), "GB/s", {5: 6, 4: 4, 3: 2, 2: 1}))
@@ -58,13 +55,6 @@ rated = []
 for name, val, unit, th in records:
     s, lv = stars(val, th[5], th[4], th[3], th[2])
     rated.append((name, val, unit, s, lv))
-
-# 磁盘读若因平台不支持 O_DIRECT 而命中页缓存，数值偏高，降一档并注明
-if disk.get("read_cache_hit"):
-    for i, (name, val, unit, s, lv) in enumerate(rated):
-        if name in ("磁盘顺序读", "磁盘随机 4K 读"):
-            n = max(1, s.count("★") - 1)
-            rated[i] = (name, val, unit, STARS[:n] + "☆" * (5 - n), lv + " · 页缓存命中偏高")
 
 scores = [s.count("★") for _, _, _, s, _ in rated]
 avg = sum(scores) / len(scores) if scores else 0
@@ -93,10 +83,6 @@ hdd = [d["name"] for d in S.get("disks", []) if d.get("type") == "HDD"]
 if hdd:
     sugg.append(f"检测到机械硬盘（{'/'.join(hdd)}）。编译大量读写中间文件，HDD 会显著拖慢构建，"
                 f"建议将工作目录/缓存移到 SSD 或 NVMe。")
-vdisks = [d["name"] for d in S.get("disks", []) if d.get("type") == "虚拟盘"]
-if vdisks:
-    sugg.append(f"检测到云虚拟盘（{'/'.join(vdisks)}），IO 受宿主机配额/共享邻居限制，"
-                f"通常明显慢于本地 NVMe；构建缓存建议放本地盘（或临时盘），并配合 ccache 减少 IO 量。")
 riops = disk.get("rand_4k_read_iops")
 if riops is not None and riops < 20000:
     sugg.append(f"随机读 IOPS（{round(riops)}）偏低，属云盘/机械盘典型表现；构建缓存目录建议置于本地高性能盘，"
@@ -186,10 +172,9 @@ for name, val, unit, s, lv in rated:
     L.append(f"| {name} | {esc(val)} {unit} | {s} {lv} |")
 L.append("")
 L.append("> 评级阈值为经验参考值，可在 `scripts/render_report.py` 中调整；"
-          "CPU 单线程 ≥0.08 百万迭代/秒 ≈ 优质独享核，≥0.03 ≈ 普通核；"
-          "多核扩展效率 = 实测加速÷线程数，0.85 ≈ 接近线性；"
-          "内存 ≥6GB/s ≈ 双通道 DDR 水平；磁盘顺序写 ≥700MB/s、随机 4K ≥8 万 IOPS ≈ NVMe 水平；"
-          "编译吞吐 ≥1.5 翻译单元/秒 ≈ 高端多核；磁盘读若标注「页缓存命中」，其数值代表缓存速度而非介质速度。\n")
+          "CPU 单线程 10 百万迭代/秒 ≈ 高端桌面核，6.5 ≈ 普通服务器核；"
+          "内存 ≥6GB/s、磁盘顺序写 ≥700MB/s、随机 4K ≥8 万 IOPS 为 NVMe 水平；"
+          "编译吞吐 ≥1.5 翻译单元/秒 ≈ 高端多核。\n")
 
 L.append("## 五、编译基准（真实构建实测）\n")
 if build:

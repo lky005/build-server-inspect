@@ -11,6 +11,7 @@ import argparse
 import json
 import math
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -57,7 +58,6 @@ def bench_cpu(mode):
         "single_iters_per_sec": round(single_ips, 1),
         "single_millions_per_sec": round(single_ips / 1e6, 2),
         "multi_iters_per_sec": round(multi_ips, 1) if multi_ips else None,
-        "multi_millions_per_sec": round(multi_ips / 1e6, 2) if multi_ips else None,
         "speedup": round(speedup, 2) if speedup else None,
         "note": "负载为 xorshift 整数运算与 sin/cos 浮点运算混合，模拟编译期 CPU 高压力场景",
     }
@@ -66,93 +66,55 @@ def bench_cpu(mode):
 def bench_mem():
     size = 256 * 1024 * 1024  # 256MB，避免占用过多内存
     buf = bytearray(size)
+    mv = memoryview(buf).cast("I")
     t0 = time.perf_counter()
     for i in range(0, size, 4096):
         buf[i:i + 4096] = b"\x01" * 4096
     write_s = time.perf_counter() - t0
-    # 读测试用 bytes() 做 C 层整块复制（memcpy），测的是真实读带宽而非逐元素 Python 循环
     t0 = time.perf_counter()
-    copy = bytes(buf)
+    total = sum(mv)
     read_s = time.perf_counter() - t0
     del buf
-    del copy
     return {
         "buf_mb": size // 1024 // 1024,
         "write_gbs": round(size / write_s / 1e9, 2),
         "read_gbs": round(size / read_s / 1e9, 2),
-        "note": "256MB 内存块顺序读写（读为 C 层整块复制），反映内存带宽",
+        "checksum": total & 0xFF,
+        "note": "256MB 内存块顺序读写，反映内存带宽",
     }
 
 
 def bench_disk(mode):
-    import mmap
     tdir = bench_dir("bench_io_")
     try:
         size = 1024 * 1024 * 1024  # 1GB 测试文件
         chunk = 8 * 1024 * 1024
         fpath = tdir / "io_test.bin"
         data = os.urandom(chunk)
-        t0 = time.perf_counter()
         with fpath.open("wb", buffering=0) as f:
             for _ in range(size // chunk):
                 f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        write_s = time.perf_counter() - t0
-
-        # 顺序读：优先 O_DIRECT + 页对齐缓冲绕开页缓存，测真实介质速度；
-        # 平台不支持 O_DIRECT（如 Windows、某些文件系统/tmpfs）时回退普通读并标注缓存命中。
-        odirect = getattr(os, "O_DIRECT", None)
-        cache_hit = False
-        read_s = 0.0
-        fd = None
-        try:
-            if odirect is None:
-                raise OSError("O_DIRECT 不可用")
-            fd = os.open(fpath, os.O_RDONLY | odirect)
-            aligned = mmap.mmap(-1, chunk)
-            t0 = time.perf_counter()
-            off = 0
-            while off < size:
-                os.preadv(fd, [aligned], off)
-                off += chunk
-            read_s = time.perf_counter() - t0
-            aligned.close()
-        except OSError:
-            cache_hit = True
-            t0 = time.perf_counter()
-            with fpath.open("rb", buffering=0) as f:
-                while f.read(chunk):
-                    pass
-            read_s = time.perf_counter() - t0
-        finally:
-            if fd is not None:
-                os.close(fd)
+        wt = time.perf_counter()
+        with fpath.open("rb", buffering=0) as f:
+            while f.read(chunk):
+                pass
+        rt = time.perf_counter() - wt
         res = {
             "file_mb": size // 1024 // 1024,
-            "seq_write_mbs": round(size / write_s / 1e6, 1),
-            "seq_read_mbs": round(size / read_s / 1e6, 1),
-            "read_cache_hit": cache_hit,
-            "note": "1GB 文件 8MB 块；写含 fsync 真实落盘；读优先 O_DIRECT 绕开页缓存，"
-                    "不支持时回退普通读并标注",
+            "seq_write_mbs": round(size / wt / 1e6, 1),
+            "seq_read_mbs": round(size / rt / 1e6, 1),
+            "note": "1GB 文件 8MB 块顺序读写（写含 fsync），随机读 4K 块 65536 次",
         }
         if mode == "full":
             n = 65536
-            nblocks = size // 4096
-            if not cache_hit:
-                r4k = mmap.mmap(-1, 4096)
-                t0 = time.perf_counter()
-                for i in range(n):
-                    os.preadv(fd, [r4k], (i * 2654435761 % nblocks) * 4096)
-                rand_s = time.perf_counter() - t0
-                r4k.close()
-            else:
-                t0 = time.perf_counter()
-                with fpath.open("rb", buffering=0) as f:
-                    for i in range(n):
-                        f.seek((i * 2654435761 % nblocks) * 4096)
-                        f.read(4096)
-                rand_s = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            with fpath.open("rb", buffering=0) as f:
+                for _ in range(n):
+                    f.seek(random.randrange(0, size - 4096, 4096))
+                    f.read(4096)
+            rand_s = time.perf_counter() - t0
             res["rand_4k_read_iops"] = round(n / rand_s, 0)
             res["rand_4k_read_mbs"] = round(n * 4096 / rand_s / 1e6, 2)
     finally:

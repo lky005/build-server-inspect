@@ -44,8 +44,8 @@ cpuinfo = read("/proc/cpuinfo")
 models = set(re.findall(r"^model name\s*:\s*(.+)$", cpuinfo, re.M))
 OUT["cpu_model"] = models.pop() if models else ""
 OUT["cpu_threads"] = len(re.findall(r"^processor\s*:", cpuinfo, re.M))
-sockets = set(re.findall(r"^physical id\s*:\s*(\d+)$", cpuinfo, re.M))
-core_ids = set(re.findall(r"^core id\s*:\s*(\d+)$", cpuinfo, re.M))
+sockets = set(re.findall(r"^physical id\s+:+\s*(\d+)$", cpuinfo, re.M))
+core_ids = set(re.findall(r"^core id\s+:+\s*(\d+)$", cpuinfo, re.M))
 OUT["cpu_sockets"] = len(sockets) or 1
 OUT["cpu_cores"] = len(core_ids) if core_ids else OUT["cpu_threads"]
 
@@ -113,17 +113,10 @@ if os.path.isdir(block_root):
             vendor = read(os.path.join(block_root, name, "device/vendor")).strip()
             if vendor:
                 model = f"{vendor} {model}"
-            model_l = model.lower()
-            if any(k in model_l for k in ("virtual", "msft", "qemu", "kvm", "hyper-v", "vdisk")):
-                disctype = "虚拟盘"
-            elif rota == "1":
-                disctype = "HDD"
-            else:
-                disctype = "SSD"
             disks.append({
                 "name": name,
                 "size_gb": round(sectors * 512 / 1024**3, 1),
-                "type": disctype,
+                "type": "HDD" if rota == "1" else "SSD",
                 "model": model,
             })
         except Exception:
