@@ -140,11 +140,14 @@ def bench_disk(mode):
             n = 65536
             nblocks = size // 4096
             if not cache_hit:
+                # 顺序读结束后 fd 已被 finally 关闭，随机读重新打开保持 O_DIRECT
+                fd2 = os.open(fpath, os.O_RDONLY | odirect)
                 r4k = mmap.mmap(-1, 4096)
                 t0 = time.perf_counter()
                 for i in range(n):
-                    os.preadv(fd, [r4k], (i * 2654435761 % nblocks) * 4096)
+                    os.preadv(fd2, [r4k], (i * 2654435761 % nblocks) * 4096)
                 rand_s = time.perf_counter() - t0
+                os.close(fd2)
                 r4k.close()
             else:
                 t0 = time.perf_counter()
